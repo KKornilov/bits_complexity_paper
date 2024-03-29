@@ -131,6 +131,8 @@ class IAlgorithm(abc.ABC):
         self._init_set_param_nodes()
         for _ in tqdm(range(self.iteration_number)):
             self._alg_step()
+            
+#/--------------------------------------------------------EF21------------------------------------------/
 
 class EF21Node(Node):
     def __init__(self, node_step: Callable[..., None], func_in_node: Callable[[
@@ -213,6 +215,8 @@ class EF21(IAlgorithm):
                     self.nodes_quantity)]
 
         self.master.nodes_list = init_nodes()
+        
+#/---------------------------------------------------------Marina--------------------------------------------------/
 
 class MarinaNode(Node):
     def __init__(self, node_step: Callable[..., None], func_in_node: Callable[[
@@ -267,7 +271,7 @@ class Marina(IAlgorithm) :
 
         def collect_grad_from_nodes(nodes_list: list[MarinaNode]):
             return jnp.mean(jnp.array([node.g for node in nodes_list]), axis=0)
-
+            
         self.master.probability = np.random.choice([1, 0], p = [0.1, 0.9])
         send_grad_to_nodes(master.nodes_list)
         all_node_compute(master.nodes_list)
@@ -300,4 +304,105 @@ class Marina(IAlgorithm) :
                     self.startion_point) for i in range(
                     self.nodes_quantity)]
 
+        self.master.nodes_list = init_nodes()
+
+#--------------------------------------------------------------Diana------------------------------------------------------------------/
+
+class DianaNode(Node):
+    def __init__(self, node_step: Callable[..., None], func_in_node: Callable[[
+                 ndarray], ndarray], compressor: Callable[[ndarray], ndarray], x: ndarray, start_rate : float) -> None:
+        super().__init__(node_step, func_in_node, compressor, x)
+        self.local_grad = 0
+        self.local_shifted_grad = 0
+        self.local_shift = self.grad_func(x)
+        self.rate = start_rate
+
+class DianaMaster(Master):
+    def __init__(self,
+                 nodes_quantity: int,
+                 master_step: Callable[...,
+                                       None],
+                 x: ndarray) -> None:
+        super().__init__(nodes_quantity, master_step, x)
+        self.learning_rate = None
+
+class Diana(IAlgorithm) :
+    def __init__(self,
+                 starting_point: jax.Array,
+                 learning_rate: float,
+                 iteration_number: int,
+                 compressor_func: Callable[...,
+                                           Any],
+                 nodes_quantity: int,
+                 node_func: list[Callable[...,
+                                          Any]],
+                 diana_learning_rates : list,
+                 master_rates) -> None:
+        super().__init__(
+            starting_point,
+            learning_rate,
+            iteration_number,
+            compressor_func,
+            nodes_quantity,
+            node_func)
+        self.diana_learning_rates = diana_learning_rates # \nu_k \forall i \in range(it_num)
+        self.master_rate = master_rates # \alpha_k \forall i \in range(it_num)
+
+    def _node_step(self, node: DianaNode):
+        g = node.grad_func(node.x)
+        node.local_shifted_grad = node.compressor(g - node.local_shift)
+        node.local_shift += node.rate * node.local_shifted_grad
+
+    def _master_step(self, master: DianaMaster):
+        def send_info_to_nodes(nodes_list: list[DianaNode]) -> None:
+            for node in nodes_list:
+                node.x = master.x
+                node.rate = master.rates[0]
+
+        def all_node_compute(nodes_list: list[DianaNode]):
+            for node in nodes_list:
+                node.compute()
+
+        def collect_local_shifted_grad_from_nodes(nodes_list: list[DianaNode]):
+            return jnp.mean(jnp.array([node.local_shifted_grad for node in nodes_list]), axis=0)
+        
+        current_node_rate = master.rates.pop(0)
+        current_learning_rate = master.learning_rate.pop(0)
+        all_node_compute(master.nodes_list)
+        master.g = master.h + collect_local_shifted_grad_from_nodes(master.nodes_list)
+        master.x -= current_learning_rate * master.g
+        master.h += current_node_rate * (master.g - master.h)
+        send_info_to_nodes(master.nodes_list)
+
+
+    def _alg_step(self):
+        self.master.compute()
+        # collect info about alg
+
+    def _init_set_param_master(self) -> None:
+        self.master = DianaMaster(
+            self.nodes_quantity,
+            self._master_step,
+            self.startion_point)
+        start_grad = jax.grad(self.node_func[0], 0)
+        self.master.learning_rate = self.diana_learning_rates
+        self.master.rates = self.master_rate
+        self.master.h = start_grad(self.startion_point)
+
+
+
+
+    def _init_set_param_nodes(self) -> None:
+        def init_nodes() -> list:
+            if (debug_mode):
+                assert self.nodes_quantity == len(
+                    self.node_func), "nodes_quantity != len(node_func))"
+            return [
+                DianaNode(
+                    self._node_step,
+                    self.node_func[i],
+                    self.comressor_func,
+                    self.startion_point, 
+                    self.master.rates[0]) for i in range(
+                    self.nodes_quantity)]
         self.master.nodes_list = init_nodes()
