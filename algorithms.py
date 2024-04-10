@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import abc
 from typing import Any, Callable
 
-
 debug_mode = True
 
 ######################################################################
@@ -134,12 +133,14 @@ class IAlgorithm(abc.ABC):
             
 #/--------------------------------------------------------EF21------------------------------------------/
 
-class EF21Node(Node):
+
+  class EF21Node(Node):
     def __init__(self, node_step: Callable[..., None], func_in_node: Callable[[
                  ndarray], ndarray], compressor: Callable[[ndarray], ndarray], x: ndarray) -> None:
         super().__init__(node_step, func_in_node, compressor, x)
         self.c = 0
-        self.g = 0
+        self.g = compressor(self.grad_func(self.x)) # node start gradient init
+
 
 class EF21Master(Master):
     def __init__(self,
@@ -149,7 +150,7 @@ class EF21Master(Master):
                  x: ndarray) -> None:
         super().__init__(nodes_quantity, master_step, x)
         self.learning_rate = None
-        self.g = 0
+
 
 class EF21(IAlgorithm):
     def __init__(self,
@@ -213,8 +214,8 @@ class EF21(IAlgorithm):
                     self.comressor_func,
                     self.startion_point) for i in range(
                     self.nodes_quantity)]
-
         self.master.nodes_list = init_nodes()
+        self.master.g = jnp.mean(jnp.array([node.g for node in self.master.nodes_list]), axis = 0) # masters gradient init
         
 #/---------------------------------------------------------Marina--------------------------------------------------/
 
